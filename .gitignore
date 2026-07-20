@@ -4,6 +4,7 @@ lib/*
 include/camera/*
 include/stream/*
 .vscode
+.claude/
 *.pyc
 
 !bag/raw/.gitkeep

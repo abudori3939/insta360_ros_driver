@@ -117,6 +117,14 @@ public:
         RCLCPP_INFO(node_->get_logger(), "Camera opened successfully.");
         discovery.FreeDeviceDescriptors(list);
 
+        // Ensure both lenses are active. On the X5/X4 the camera remembers its last
+        // active-sensor selection across USB sessions; if it was left on a single lens
+        // (e.g. rear only) the live stream is a single-lens 16:9 image instead of the
+        // 2:1 dual-fisheye. Forcing SENSOR_DEVICE_ALL guarantees the dual-fisheye stream.
+        if (!cam->SetActiveSensor(ins_camera::SENSOR_DEVICE_ALL)) {
+            RCLCPP_WARN(node_->get_logger(), "SetActiveSensor(ALL) failed; the stream may be single-lens.");
+        }
+
         std::shared_ptr<ins_camera::StreamDelegate> delegate = std::make_shared<TestStreamDelegate>(node_);
         cam->SetStreamDelegate(delegate);
 

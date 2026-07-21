@@ -20,7 +20,12 @@ EquirectangularNode::EquirectangularNode()
     declare_parameter("gpu", true);
     declare_parameter("out_width", 1920);
     declare_parameter("out_height", 960);
-    
+    // Publish rate ceiling. 0 disables throttling and projects every frame that arrives.
+    declare_parameter("max_rate", 10.0);
+    // nearest | linear | cubic. Cubic costs several times linear and the difference is
+    // not visible on a fisheye unwarp, so linear is the default.
+    declare_parameter("interpolation", "linear");
+
     // Load parameters
     loadParameters();
     
@@ -44,10 +49,17 @@ EquirectangularNode::EquirectangularNode()
     
     equirect_pub_ = create_publisher<sensor_msgs::msg::Image>(
         "/equirectangular/image", qos);
+
+    worker_thread_ = std::thread(&EquirectangularNode::workerLoop, this);
 }
 
 EquirectangularNode::~EquirectangularNode()
 {
+    stop_worker_ = true;
+    slot_cv_.notify_all();
+    if (worker_thread_.joinable()) {
+        worker_thread_.join();
+    }
 }
 
 void EquirectangularNode::loadParameters()
@@ -59,7 +71,21 @@ void EquirectangularNode::loadParameters()
         out_width_ = get_parameter("out_width").as_int();
         out_height_ = get_parameter("out_height").as_int();
         gpu_enabled_ = get_parameter("gpu").as_bool();
-        
+        max_rate_ = get_parameter("max_rate").as_double();
+
+        const std::string interpolation = get_parameter("interpolation").as_string();
+        if (interpolation == "nearest") {
+            interpolation_ = cv::INTER_NEAREST;
+        } else if (interpolation == "cubic") {
+            interpolation_ = cv::INTER_CUBIC;
+        } else {
+            if (interpolation != "linear") {
+                RCLCPP_WARN(get_logger(), "Unknown interpolation '%s', using linear",
+                            interpolation.c_str());
+            }
+            interpolation_ = cv::INTER_LINEAR;
+        }
+
         auto translation = get_parameter("translation").as_double_array();
         tx_ = translation[0];
         ty_ = translation[1];
@@ -78,6 +104,12 @@ void EquirectangularNode::loadParameters()
                     rotation_deg[0], rotation_deg[1], rotation_deg[2]);
         RCLCPP_INFO(get_logger(), "  Output size: %dx%d", out_width_, out_height_);
         RCLCPP_INFO(get_logger(), "  GPU enabled: %s", gpu_enabled_ ? "true" : "false");
+        RCLCPP_INFO(get_logger(), "  Interpolation: %s", interpolation.c_str());
+        if (max_rate_ > 0.0) {
+            RCLCPP_INFO(get_logger(), "  Max rate: %.1f Hz", max_rate_);
+        } else {
+            RCLCPP_INFO(get_logger(), "  Max rate: unthrottled");
+        }
     } catch (const std::exception& e) {
         RCLCPP_ERROR(get_logger(), "Error loading parameters: %s", e.what());
         gpu_enabled_ = true;
@@ -246,8 +278,8 @@ cv::Mat EquirectangularNode::createEquirectangular(const cv::Mat& front_img, con
     }
     
     cv::Mat front_result, back_result;
-    cv::remap(front_img, front_result, front_map_x_, front_map_y_, cv::INTER_CUBIC, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
-    cv::remap(back_img, back_result, back_map_x_, back_map_y_, cv::INTER_CUBIC, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
+    cv::remap(front_img, front_result, front_map_x_, front_map_y_, interpolation_, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
+    cv::remap(back_img, back_result, back_map_x_, back_map_y_, interpolation_, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
     
     cv::Mat equirect = cv::Mat::zeros(out_height_, out_width_, CV_8UC3);
     
@@ -264,7 +296,48 @@ cv::Mat EquirectangularNode::createEquirectangular(const cv::Mat& front_img, con
 
 void EquirectangularNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr dual_fisheye_msg)
 {
-    
+    {
+        std::lock_guard<std::mutex> lock(slot_mutex_);
+        latest_msg_ = dual_fisheye_msg;  // replaces any frame not yet picked up
+    }
+    slot_cv_.notify_one();
+}
+
+void EquirectangularNode::workerLoop()
+{
+    while (!stop_worker_) {
+        sensor_msgs::msg::Image::SharedPtr frame;
+        {
+            std::unique_lock<std::mutex> lock(slot_mutex_);
+            slot_cv_.wait(lock, [this] { return latest_msg_ != nullptr || stop_worker_; });
+            if (stop_worker_) {
+                break;
+            }
+
+            // Wait out the rate limit before claiming a frame, not after. Sleeping with
+            // a frame in hand would publish an image that went stale while we waited;
+            // sleeping first means we take whatever is newest at the moment we wake.
+            if (max_rate_ > 0.0) {
+                const auto interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                    std::chrono::duration<double>(1.0 / max_rate_));
+                const auto ready_at = last_publish_ + interval;
+                if (std::chrono::steady_clock::now() < ready_at) {
+                    slot_cv_.wait_until(lock, ready_at);
+                    continue;
+                }
+            }
+
+            frame = latest_msg_;
+            latest_msg_.reset();
+            last_publish_ = std::chrono::steady_clock::now();
+        }
+
+        processFrame(frame);
+    }
+}
+
+void EquirectangularNode::processFrame(const sensor_msgs::msg::Image::SharedPtr& dual_fisheye_msg)
+{
     try {
         cv_bridge::CvImagePtr cv_ptr = cv_bridge::toCvCopy(dual_fisheye_msg, "rgb8");
         cv::Mat dual_fisheye_img = cv_ptr->image;
@@ -315,15 +388,23 @@ void EquirectangularNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr
         auto start_time = now();
         cv::Mat equirect_img = createEquirectangular(front_img, back_img);
         
-        // Publish result
+        // Publish result. The header is passed through untouched so the camera's capture
+        // time reaches subscribers.
         cv_bridge::CvImage out_msg;
         out_msg.header = dual_fisheye_msg->header;
         out_msg.encoding = "rgb8";
         out_msg.image = equirect_img;
-        equirect_pub_->publish(*out_msg.toImageMsg());
-        
+
+        auto img_msg = std::make_unique<sensor_msgs::msg::Image>();
+        out_msg.toImageMsg(*img_msg);
+        equirect_pub_->publish(std::move(img_msg));
+
         auto process_time = (now() - start_time).seconds();
         RCLCPP_DEBUG(get_logger(), "Processing time: %.3f seconds", process_time);
+        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
+            "projection %.1f ms | camera->equirectangular lag %.1f ms",
+            process_time * 1e3,
+            (now() - rclcpp::Time(dual_fisheye_msg->header.stamp)).seconds() * 1e3);
         
     } catch (const cv_bridge::Exception& e) {
         RCLCPP_ERROR(get_logger(), "cv_bridge exception: %s", e.what());
@@ -345,6 +426,8 @@ rcl_interfaces::msg::SetParametersResult EquirectangularNode::parametersCallback
             param.get_name() == "rotation_deg" ||
             param.get_name() == "out_width" ||
             param.get_name() == "out_height" ||
+            param.get_name() == "max_rate" ||
+            param.get_name() == "interpolation" ||
             param.get_name() == "gpu") {
             update_needed = true;
         }

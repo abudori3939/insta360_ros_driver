@@ -10,12 +10,16 @@
 <launch>
     <arg name="decoder" default="true"/>
     <arg name="imu_filter" default="true"/>
+    <arg name="hw_accel" default="auto"/>
+    <arg name="hw_device" default=""/>
     <arg name="imu_config" default="$(find-pkg-share insta360_ros_driver)/config/imu_filter.yaml"/>
 
     <include file="$(find-pkg-share insta360_ros_driver)/launch/bringup.launch.xml">
         <arg name="equirectangular" value="false"/>
         <arg name="decoder" value="$(var decoder)"/>
         <arg name="imu_filter" value="$(var imu_filter)"/>
+        <arg name="hw_accel" value="$(var hw_accel)"/>
+        <arg name="hw_device" value="$(var hw_device)"/>
         <arg name="imu_config" value="$(var imu_config)"/>
     </include>
 </launch>

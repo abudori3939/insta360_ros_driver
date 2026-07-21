@@ -10,3 +10,10 @@ equirectangular_node:
     gpu: true
     out_width: 1920
     out_height: 960
+    # Publish rate ceiling. The camera streams at 30 fps but projecting every frame
+    # costs several CPU cores; 10 Hz matches a typical LiDAR and leaves latency alone,
+    # since the throttle always projects the newest frame rather than a queued one.
+    # Set to 0.0 to project everything.
+    max_rate: 10.0
+    # nearest | linear | cubic
+    interpolation: linear

@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<!--
+    Dual-fisheye only.
+
+    Publishes the raw 2:1 dual-fisheye stream (two circular fisheyes side by side).
+    No equirectangular projection is run, so this is the lightest option.
+
+    ros2 launch insta360_ros_driver fisheye.launch.xml
+-->
+<launch>
+    <arg name="decoder" default="true"/>
+    <arg name="imu_filter" default="true"/>
+    <arg name="imu_config" default="$(find-pkg-share insta360_ros_driver)/config/imu_filter.yaml"/>
+
+    <include file="$(find-pkg-share insta360_ros_driver)/launch/bringup.launch.xml">
+        <arg name="equirectangular" value="false"/>
+        <arg name="decoder" value="$(var decoder)"/>
+        <arg name="imu_filter" value="$(var imu_filter)"/>
+        <arg name="imu_config" value="$(var imu_config)"/>
+    </include>
+</launch>

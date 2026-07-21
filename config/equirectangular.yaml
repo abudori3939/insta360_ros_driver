@@ -2,7 +2,9 @@ equirectangular_node:
   ros__parameters:
     cx_offset: 0.0
     cy_offset: 0.0
-    crop_size: 960
+    # Diameter of one fisheye circle in the dual-fisheye image.
+    # X5 streams 2656x1328, so each fisheye is 1328 px (960 was for the 1920x960 X2/X3 stream).
+    crop_size: 1328
     translation: [0.0, 0.0, -0.105]
     rotation_deg: [-0.5, 0.0, 1.1]
     gpu: true

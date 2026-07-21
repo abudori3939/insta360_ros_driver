@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<!--
+    Dual-fisheye + equirectangular projection.
+
+    Runs the equirectangular node on top of the decoded dual-fisheye image, so both
+    /dual_fisheye/image and /equirectangular/image are published. The projection
+    parameters are read from config/equirectangular.yaml (tune them by running
+    scripts/equirectangular.py in calibrate mode).
+
+    The decoder is required here, since the equirectangular node subscribes to the
+    decoded /dual_fisheye/image.
+
+    ros2 launch insta360_ros_driver equirectangular.launch.xml
+-->
+<launch>
+    <arg name="decoder" default="true"/>
+    <arg name="imu_filter" default="true"/>
+    <arg name="equirectangular_config" default="$(find-pkg-share insta360_ros_driver)/config/equirectangular.yaml"/>
+    <arg name="imu_config" default="$(find-pkg-share insta360_ros_driver)/config/imu_filter.yaml"/>
+
+    <include file="$(find-pkg-share insta360_ros_driver)/launch/bringup.launch.xml">
+        <arg name="equirectangular" value="true"/>
+        <arg name="decoder" value="$(var decoder)"/>
+        <arg name="imu_filter" value="$(var imu_filter)"/>
+        <arg name="equirectangular_config" value="$(var equirectangular_config)"/>
+        <arg name="imu_config" value="$(var imu_config)"/>
+    </include>
+</launch>

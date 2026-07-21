@@ -8,6 +8,9 @@
 #include <memory>
 #include <mutex>
 #include <atomic>
+#include <thread>
+#include <chrono>
+#include <condition_variable>
 
 class EquirectangularNode : public rclcpp::Node
 {
@@ -19,6 +22,11 @@ private:
     // Callback functions
     void imageCallback(const sensor_msgs::msg::Image::SharedPtr msg);
     rcl_interfaces::msg::SetParametersResult parametersCallback(const std::vector<rclcpp::Parameter> &parameters);
+
+    // Worker loop; see the comment on latest_msg_ for why projection runs off the
+    // subscription thread.
+    void workerLoop();
+    void processFrame(const sensor_msgs::msg::Image::SharedPtr& msg);
     
     // Initialization functions
     void loadParameters();
@@ -41,6 +49,8 @@ private:
     bool gpu_enabled_;
     int out_width_;
     int out_height_;
+    double max_rate_;
+    int interpolation_;
     
     // Camera parameters
     double cx_, cy_;
@@ -60,6 +70,19 @@ private:
     
     // Thread safety
     std::mutex processing_mutex_;
+
+    // Projection is far too slow to run inline in the subscription callback at the
+    // camera's frame rate, and it does not need to: downstream only wants max_rate_ Hz.
+    // The callback therefore just parks the newest frame here and returns, and the
+    // worker picks up whatever is parked when it is ready to publish. Older frames are
+    // overwritten rather than queued, so what gets projected is always the freshest
+    // image available - throttling by queueing would publish stale frames instead.
+    std::thread worker_thread_;
+    sensor_msgs::msg::Image::SharedPtr latest_msg_;
+    std::mutex slot_mutex_;
+    std::condition_variable slot_cv_;
+    std::atomic<bool> stop_worker_{false};
+    std::chrono::steady_clock::time_point last_publish_{};
 };
 
 #endif // EQUIRECTANGULAR_HPP

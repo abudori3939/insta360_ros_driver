@@ -1,5 +1,18 @@
 # insta360_ros_driver
 
+> **About this fork**
+>
+> Fork of [ai4ce/insta360_ros_driver](https://github.com/ai4ce/insta360_ros_driver), with the changes
+> needed to run on **Ubuntu 24.04 / ROS 2 Jazzy** with an **Insta360 X5**:
+> - `SetActiveSensor(SENSOR_DEVICE_ALL)` is called before streaming, so the X5/X4 always produce the
+>   2:1 dual fisheye. These models remember their last active-sensor selection across USB sessions,
+>   and if it was left on a single lens the stream came out as a single-lens 16:9 image.
+> - `cv_bridge/cv_bridge.h` -> `cv_bridge/cv_bridge.hpp` (the C++ header was renamed in newer cv_bridge).
+> - `AVCodec*` -> `const AVCodec*` (FFmpeg >= 4.0 returns `const AVCodec*`).
+> - Added `fisheye.launch.xml` / `equirectangular.launch.xml`, and set `crop_size` for the X5.
+>
+> On the X5 the live stream comes out as **2656 x 1328**, regardless of the requested resolution enum.
+
 A ROS driver for the Insta360 cameras. This driver is tested on Ubuntu 22.04 with ROS2 Humble. The driver has also been verified on the Insta360 X2 and X3 cameras. The following resolutions are available, all at 30 FPS.
 - 3840 x 1920
 - 2560 x 1280
@@ -62,10 +75,34 @@ sudo chmod 777 /dev/insta
 The camera provides images natively in H264 compressed image format. We have a decoder node that 
 
 ### Camera Bringup
-The camera can be brought up with the following launch file
+Two launch files are provided, depending on which image you want.
+
+**Dual fisheye only (2:1)**
 ```
-ros2 launch insta360_ros_driver bringup.launch.xml
+ros2 launch insta360_ros_driver fisheye.launch.xml
 ```
+Publishes the raw 2:1 dual fisheye image (two circular fisheyes side by side). No
+equirectangular projection is run, so this is the lightest option.
+
+**Dual fisheye + equirectangular**
+```
+ros2 launch insta360_ros_driver equirectangular.launch.xml
+```
+Additionally publishes `/equirectangular/image`, using the projection parameters in
+`config/equirectangular.yaml`.
+
+Both are thin wrappers around `bringup.launch.xml`, which can still be used directly:
+```
+ros2 launch insta360_ros_driver bringup.launch.xml                          # dual fisheye only
+ros2 launch insta360_ros_driver bringup.launch.xml equirectangular:=true    # + equirectangular
+```
+
+All of them accept the same optional arguments (see below), for example:
+```
+ros2 launch insta360_ros_driver fisheye.launch.xml imu_filter:=false
+ros2 launch insta360_ros_driver equirectangular.launch.xml equirectangular_config:=/path/to/your.yaml
+```
+
 ![bringup](docs/bringup_rqt.png)
 
 A dual fisheye image will be published.
@@ -75,14 +112,16 @@ A dual fisheye image will be published.
 #### Published Topics
 - /dual_fisheye/image
 - /dual_fisheye/image/compressed
-- /equirectangular/image
+- /equirectangular/image (only with `equirectangular.launch.xml`)
 - /imu/data
 - /imu/data_raw
 
-The launch file has the following optional arguments:
+The launch files have the following optional arguments:
 - equirectangular (default="false")
 
 This publishes equirectangular images. You can configure these parameters in `config/equirectangular.yaml`.
+Note that `fisheye.launch.xml` and `equirectangular.launch.xml` already pin this argument, so you only
+need it when calling `bringup.launch.xml` directly.
 ![equirectangular](docs/equirectangular.png)
 
 - imu_filter (default="true")
@@ -92,7 +131,14 @@ This uses the [imu_filter_madgwick](https://wiki.ros.org/imu_filter_madgwick) pa
 ![IMU](https://github.com/user-attachments/assets/02b50cad-8415-4dde-9014-9ab3a4d415b9)
 
 ## Equirectangular Calibration
-You can adjust the extrinsic parameters used to improve the equirectangular image. 
+You can adjust the extrinsic parameters used to improve the equirectangular image.
+
+**`crop_size` depends on the camera model.** It is the diameter, in pixels, of one fisheye circle in
+the dual fisheye image, so it must match half the width of the stream. The X5 streams 2656x1328, so
+`crop_size` is 1328 (the default in `config/equirectangular.yaml`). On a 1920x960 stream it would be
+960. If `crop_size` is too small, only the centre of each fisheye is sampled and the left and right
+edges of the panorama stay black.
+
 ```
 # Run the camera driver
 ros2 run insta360_ros_driver insta360_ros_driver

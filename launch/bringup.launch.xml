@@ -6,17 +6,36 @@
     <arg name="equirectangular_config" default="$(find-pkg-share insta360_ros_driver)/config/equirectangular.yaml"/>
     <arg name="imu_config" default="$(find-pkg-share insta360_ros_driver)/config/imu_filter.yaml"/>
 
+    <!--
+        H.264 decoding backend. Which one works depends on the machine:
+          auto     try vaapi, qsv, cuda, v4l2m2m, then software (reports which one won)
+          vaapi    AMD and Intel integrated graphics
+          qsv      Intel Quick Sync
+          cuda     NVIDIA discrete cards (NVDEC)
+          v4l2m2m  Jetson, Raspberry Pi
+          none     software
+        Naming a backend explicitly makes startup fail loudly if it is not usable,
+        which is usually what you want once you know what the machine has.
+    -->
+    <arg name="hw_accel" default="auto"/>
+    <arg name="hw_device" default=""/>
+
     <!-- Publishes Compressed Images -->
-    <node pkg="insta360_ros_driver" exec="insta360_ros_driver" name="insta360_ros_driver" output="log"/>
+    <node pkg="insta360_ros_driver" exec="insta360_ros_driver" name="insta360_ros_driver" output="log">
+        <!-- Stamp messages with the camera's own capture time instead of arrival time. -->
+        <param name="use_camera_timestamp" value="true"/>
+    </node>
 
     <!-- Decodes Compressed Images -->
     <node pkg="insta360_ros_driver" exec="decoder" name="image_decoder" output="log" if="$(var decoder)">
         <param name="compressed_topic" value="/dual_fisheye/image/compressed"/>
         <param name="uncompressed_topic" value="/dual_fisheye/image"/>
+        <param name="hw_accel" value="$(var hw_accel)"/>
+        <param name="hw_device" value="$(var hw_device)"/>
         <!-- We can skip decoding every <skip_frame>. So skip_frame = 1 will only publish half the frames, etc. -->
         <param name="skip_frame" value="0"/>
         <!-- If you want to minimize the CPU load the most, you can decode only the i-frames. But the expected FPS is about 1-2 FPS -->
-        <param name="i_frame_only" value="false"/> 
+        <param name="i_frame_only" value="false"/>
     </node>
 
     <!-- Creates Equirectangular Images -->

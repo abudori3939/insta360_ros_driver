@@ -27,19 +27,16 @@ private:
     // subscription thread.
     void workerLoop();
     void processFrame(const sensor_msgs::msg::Image::SharedPtr& msg);
-    
+
     // Initialization functions
     void loadParameters();
     void updateCameraParameters();
-    void initMapping(int img_height, int img_width);
-    
-    // Processing functions
-    cv::Mat createEquirectangular(const cv::Mat& front_img, const cv::Mat& back_img);
-    
+    void initMapping(int dual_height, int dual_width);
+
     // ROS2 communication
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr dual_fisheye_sub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr equirect_pub_;
-    
+
     // Parameters
     double cx_offset_;
     double cy_offset_;
@@ -51,25 +48,28 @@ private:
     int out_height_;
     double max_rate_;
     int interpolation_;
-    
+
     // Camera parameters
-    double cx_, cy_;
     cv::Mat back_to_front_rotation_;
     cv::Vec3d back_to_front_translation_;
-    
-    // Mapping matrices
-    cv::Mat front_map_x_, front_map_y_;
-    cv::Mat back_map_x_, back_map_y_;
-    cv::Mat front_mask_, back_mask_;
-    
+
+    // Combined remap tables in raw dual-fisheye coordinates. The per-frame split,
+    // 90-degree rotations, center crop and front/back hemisphere selection are all
+    // folded into these at init time, so projection is a single cv::remap of the
+    // incoming image. Stored in the fixed-point form convertMaps() produces, which
+    // remap executes noticeably faster than CV_32F maps.
+    cv::Mat map1_;  // CV_16SC2 integer coordinates
+    cv::Mat map2_;  // CV_16UC1 interpolation-table indices
+
     // State management
     std::atomic<bool> maps_initialized_;
     std::atomic<bool> params_changed_;
-    int img_height_;
-    int img_width_;
-    
-    // Thread safety
-    std::mutex processing_mutex_;
+    int dual_height_;
+    int dual_width_;
+
+    // Scratch buffer reused across frames when the input needs a BGR->RGB swap
+    // after remapping (avoids a per-frame allocation).
+    cv::Mat remap_buf_;
 
     // Projection is far too slow to run inline in the subscription callback at the
     // camera's frame rate, and it does not need to: downstream only wants max_rate_ Hz.

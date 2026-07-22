@@ -10,6 +10,10 @@
 > - `cv_bridge/cv_bridge.h` -> `cv_bridge/cv_bridge.hpp` (the C++ header was renamed in newer cv_bridge).
 > - `AVCodec*` -> `const AVCodec*` (FFmpeg >= 4.0 returns `const AVCodec*`).
 > - Added `fisheye.launch.xml` / `equirectangular.launch.xml`, and set `crop_size` for the X5.
+> - Rewrote the equirectangular node's per-frame path as a single fixed-point `cv::remap`: the
+>   split/rotate/crop/hemisphere-merge steps are folded into the remap tables at startup, the input
+>   message is read zero-copy, and the result is remapped straight into the outgoing message buffer
+>   (~6x faster; ~19 ms -> ~3 ms per frame on a 2656x1328 X5 stream).
 >
 > On the X5 the live stream comes out as **2656 x 1328**, regardless of the requested resolution enum.
 
@@ -90,6 +94,12 @@ ros2 launch insta360_ros_driver equirectangular.launch.xml
 ```
 Additionally publishes `/equirectangular/image`, using the projection parameters in
 `config/equirectangular.yaml`.
+
+The projection runs as a single precomputed `cv::remap` of the raw dual-fisheye image, so its
+per-frame cost is a few milliseconds on a modern CPU. The node logs
+`projection X.X ms | camera->equirectangular lag X.X ms` every 5 seconds; if there is CPU headroom,
+`max_rate` in `config/equirectangular.yaml` can be raised (up to the camera's 30 fps, or 0.0 to
+project every frame).
 
 Both are thin wrappers around `bringup.launch.xml`, which can still be used directly:
 ```
